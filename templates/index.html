@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FastMcpLLM 对话工具</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>FastMcpLLM 对话工具</h1>
+            <p>一个支持MCP的LLM对话工具</p>
+        </header>
+
+        <main>
+            <div class="main-content">
+                <div class="chat-container">
+                    <div class="chat-messages" id="chat-messages">
+                        <div class="message system">
+                            <div class="message-content">欢迎使用FastMcpLLM对话工具！您可以开始与AI助手对话，助手可以通过MCP协议调用各种工具来扩展能力。</div>
+                        </div>
+                    </div>
+
+                    <div class="chat-input-container">
+                        <textarea id="user-input" placeholder="输入您的消息..." rows="3"></textarea>
+                        <div class="button-container">
+                            <button id="clear-btn" class="btn btn-secondary">清除对话</button>
+                            <button id="send-btn" class="btn btn-primary">发送</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tools-panel" id="tools-panel">
+                    <div class="tools-header">
+                        <h2>可用工具</h2>
+                        <button id="refresh-tools-btn" class="btn btn-small">刷新</button>
+                    </div>
+                    <div class="tools-list" id="tools-list">
+                        <div class="loading-tools">加载中...</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Powered by FastMCP &copy; 2025</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</body>
+</html>

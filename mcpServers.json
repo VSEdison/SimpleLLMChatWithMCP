@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "FastMcpLLM": {
+      "command": "python",
+      "args": ["mcp_server.py"]
+    },
+    "Context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp@latest"
+      ]
+    }
+  }
+}
