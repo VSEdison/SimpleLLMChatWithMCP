@@ -31,7 +31,7 @@ FastMcpLLM是一个支持MCP（Model Context Protocol）的LLM对话工具，使
 1. 克隆项目仓库：
 
 ```bash
-git clone https://github.com/yourusername/FastMcpLLM.git
+git clone https://github.com/VSEdison/SimpleLLMChatWithMCP.git
 cd FastMcpLLM
 ```
 
