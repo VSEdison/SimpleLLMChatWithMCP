@@ -7,7 +7,7 @@
 
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    line-height: 1.0;
+    line-height: 1.5;
     color: #222;
     background: linear-gradient(135deg, #e0e7ff 0%, #f5f5f5 100%);
 }
@@ -235,44 +235,48 @@ header p {
 }
 
 /* 思考过程和工具调用的样式 */
-.thinking-section, .tool-call-section {
-    border: none;
-    border-radius: 12px;
-    margin: 14px 0;
-    overflow: hidden;
-    background: #f7faff;
-    box-shadow: 0 1px 4px rgba(60, 80, 180, 0.04);
-    transition: box-shadow 0.2s;
-}
-.thinking-header, .tool-call-header {
-    background: #e0e7ff;
-    color: #3b4cca;
-    font-weight: 600;
-    padding: 10px 16px;
+.think-section .think-header,
+.tool-section .tool-header,
+.tool-result-section .tool-result-header {
+    padding: 8px 12px;
+    font-weight: bold;
     cursor: pointer;
+    background-color: #e0e7ff;
+    border: 1px solid #ddd;
+    border-radius: 4px 4px 0 0;
+    margin-top: 10px;
     display: flex;
     align-items: center;
-    border-bottom: 1px solid #e0e0e0;
-    user-select: none;
 }
-.thinking-header .toggle-icon, .tool-call-header .toggle-icon {
-    margin-left: auto;
-    font-size: 1.1em;
-    transition: transform 0.2s;
+
+.think-section .think-content,
+.tool-section .tool-content,
+.tool-result-section .tool-result-content {
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    background-color: #f7faff;
+    white-space: pre-wrap; 
 }
-.thinking-section:not(.expanded) .thinking-content,
-.tool-call-section:not(.expanded) .tool-call-content {
+
+.think-section.collapsed .think-content, 
+.tool-section.collapsed .tool-content,
+.tool-result-section.collapsed .tool-result-content {
     display: none;
 }
-.thinking-section:not(.expanded) .toggle-icon,
-.tool-call-section:not(.expanded) .toggle-icon {
-    transform: rotate(-90deg);
+.think-section.expanded .think-content, 
+.tool-section.expanded .tool-content,
+.tool-result-section.expanded .tool-result-content {
+    display: block;
 }
-.thinking-content, .tool-call-content {
-    padding: 14px 18px;
-    font-size: 1.03rem;
-    color: #444;
-    background: #f7faff;
+
+
+.toggle-icon {
+    margin-right: 8px;
+    font-size: 0.8em;
+    transition: transform 0.2s ease-in-out;
+    display: inline-block; 
 }
 
 /* 聊天输入区样式 */

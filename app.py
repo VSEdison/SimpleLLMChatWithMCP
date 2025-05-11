@@ -8,7 +8,8 @@ import subprocess
 import signal
 import sys
 import threading
-from quart import Quart, render_template, request, jsonify, session
+import json
+from quart import Quart, render_template, jsonify, websocket
 from dotenv import load_dotenv
 
 from mcp_client import mcp_llm_client
@@ -127,40 +128,7 @@ async def index():
     return await render_template('index.html')
 
 
-@app.route('/api/chat', methods=['GET']) # Changed to GET
-async def chat():
-    """
-    处理聊天请求
-    """
-    # 获取用户消息 from query parameter
-    user_message = request.args.get('message', '')
-
-    if not user_message:
-        return jsonify({'error': '消息不能为空'}), 400
-
-    # 确保客户端已初始化
-    if not client_initialized:
-        await initialize_client()
-
-    async def generate():
-        try:
-            async for chunk in mcp_llm_client.process_message(user_message):
-                # 处理换行符：将每行都加上data:前缀
-                if '\n' in chunk:
-                    # 分割成多行，每行都加上data:前缀
-                    lines = chunk.split('\n')
-                    formatted_chunk = '\n'.join([f"data: {line}" for line in lines])
-                    yield f"{formatted_chunk}\n\n"
-                else:
-                    yield f"data: {chunk}\n\n"
-
-            # 发送一个特殊标记表示流结束
-            yield f"data: [DONE]\n\n"
-        except Exception as e:
-            print(f"Error during streaming: {str(e)}")
-            yield f"data: [ERROR]处理消息时出错: {str(e)}\n\n"
-
-    return app.response_class(generate(), mimetype='text/event-stream')
+# SSE路由已移除，改用WebSocket
 
 
 @app.route('/api/clear', methods=['POST'])
@@ -209,6 +177,44 @@ async def get_tools():
         'status': 'success',
         'tools_by_server': tools_by_server
     })
+
+
+@app.websocket('/api/ws')
+async def ws():
+    """
+    WebSocket处理聊天请求
+    """
+    # 确保客户端已初始化
+    if not client_initialized:
+        await initialize_client()
+
+    # 接收第一条消息（用户问题）
+    try:
+        data = await websocket.receive()
+        message_data = json.loads(data)
+        user_message = message_data.get('message', '')
+
+        if not user_message:
+            await websocket.send(json.dumps({'error': '消息不能为空'}))
+            return
+
+        # 处理消息流
+        async for chunk in mcp_llm_client.process_message(user_message):
+            # 发送消息块
+            await websocket.send(chunk)
+
+        # 发送一个特殊标记表示流结束
+        await websocket.send("[DONE]")
+    except asyncio.CancelledError:
+        # WebSocket连接被客户端关闭
+        print("WebSocket连接被客户端关闭")
+        raise
+    except Exception as e:
+        print(f"WebSocket处理出错: {str(e)}")
+        try:
+            await websocket.send(f"[ERROR]处理消息时出错: {str(e)}")
+        except:
+            pass
 
 
 @app.before_serving

@@ -32,7 +32,7 @@ class LLMClient:
             print("警告: 未设置API密钥，请在.env文件中设置LLM_API_KEY")
 
         self.conversation_history = []
-        self.system_message = "你是一个由FastMcpLLM提供支持的AI助手。你可以通过MCP协议调用各种工具来扩展你的能力。请确保使用用户的主语言进行回答。"
+        self.system_message = "你是一个由FastMcpLLM提供支持的AI助手。你可以通过MCP协议调用各种工具来扩展你的能力。请确保使用中文进行回答。"
 
     def add_message(self, role: str, content: str) -> None:
         """
@@ -92,6 +92,7 @@ class LLMClient:
             "model": self.api_model,
             "messages": messages,
             "temperature": 0.7,
+            "max_tokens" : 40960,
             "stream": True  # 启用流式响应
         }
         
@@ -288,6 +289,7 @@ class MCPLLMClient:
 
             # Stream 1: Initial LLM response
             initial_llm_response_buffer = ""
+            # print("Calling LLM with messages:", current_messages)
             async for chunk in self.llm_client.call_llm_api(current_messages):
                 if isinstance(chunk, str) and chunk.startswith("错误:"):
                     yield chunk
@@ -306,100 +308,108 @@ class MCPLLMClient:
             import re
             # json is already imported globally
 
-            tool_call_match = re.search(r'<tool>(.*?)</tool>', initial_llm_response_buffer, re.DOTALL)
+            tool_call_matches = re.findall(r'<tool>(.*?)</tool>', initial_llm_response_buffer, re.DOTALL)
+           
 
-            if tool_call_match:
-                tool_call_json_str = tool_call_match.group(1).strip()
-                
-                # The LLM's output containing the tool call has already been streamed.
-                # Now we process the tool call.
+            if tool_call_matches:
+                # print(initial_llm_response_buffer)
+                tool_results_message_for_llm = ""
+                for tool_call_json_str in tool_call_matches:
+                    tool_call_json_str = tool_call_json_str.strip()
+                    
+                    # The LLM's output containing the tool call has already been streamed.
+                    # Now we process the tool call.
 
-                parsed_tool_name = None
-                parsed_tool_args = None
-                try:
-                    tool_data = json.loads(tool_call_json_str)
-                    parsed_tool_name = tool_data.get("name")
-                    parsed_tool_args = tool_data.get("parameters", {})
-                except Exception as e:
-                    error_msg = f"解析工具调用JSON时出错: {str(e)}"
-                    yield f"\n<think>\n内部错误: {error_msg}\n</think>\n"
-                    # LLM already added initial_llm_response_buffer to history.
-                    return
-
-                available_tool_names = [tool.name for tool in self.all_tools]
-                if parsed_tool_name and parsed_tool_name in available_tool_names:
+                    parsed_tool_name = None
+                    parsed_tool_args = None
                     try:
-                        target_server_name = "FastMcpLLM"  # Default server
-                        tool_name_on_server = parsed_tool_name
-
-                        if ":" in parsed_tool_name:
-                            prefix, name_after_colon = parsed_tool_name.split(":", 1)
-                            if prefix in self.mcp_clients:  # Check if prefix is a known server name
-                                target_server_name = prefix
-                                tool_name_on_server = name_after_colon
-                        
-                        mcp_client_instance = self.mcp_clients.get(target_server_name)
-                        if not mcp_client_instance:
-                            error_msg = f"错误: 找不到服务器 {target_server_name} 的客户端"
-                            yield f"\n<think>\n内部错误: {error_msg}\n</think>\n"
-                            return
-
-                        tool_result_list = await mcp_client_instance.call_tool(tool_name_on_server, parsed_tool_args or {})
-                        
-                        result_text_parts = []
-                        for content_item in tool_result_list:
-                            if hasattr(content_item, 'text'):
-                                result_text_parts.append(content_item.text)
-                            elif hasattr(content_item, 'url'):
-                                result_text_parts.append(f"[图片] {content_item.url}")
-                            # else: skip unknown content types or add a placeholder
-                        tool_result_str = "\n".join(result_text_parts).strip()
-
-                        # Escape for JSON string compatibility within the XML-like tag
-                        escaped_tool_result_str = tool_result_str.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-                        
-                        tool_result_message_for_llm = f"<tool_result>\n{{\n  \"name\": \"{parsed_tool_name}\",\n  \"result\": \"{escaped_tool_result_str}\"\n}}\n</tool_result>"
-                        
-                        yield f"\n{tool_result_message_for_llm}\n" # Stream the tool result to the client
-
-                        # Update conversation history for the next LLM call
-                        # The initial assistant message (initial_llm_response_buffer) is already there.
-                        # Now add the tool_result as if it's a user message for the LLM.
-                        # self.llm_client.add_message("user", tool_result_message_for_llm) 
-
-                        # Stream 2: LLM explanation of tool result
-                        final_explanation_content = ""
-                        async for chunk in self.process_message(tool_result_message_for_llm): # Uses updated history
-                            if isinstance(chunk, str) and chunk.startswith("错误:"):
-                                yield chunk
-                                return
-                            final_explanation_content += chunk
-                            yield chunk
-                        
-                        # Replace the previous assistant message with the full exchange if tool call was successful
-                        if self.llm_client.conversation_history and self.llm_client.conversation_history[-2]["role"] == "assistant":
-                           self.llm_client.conversation_history[-2]["content"] = initial_llm_response_buffer # Ensure this is the one with the <tool> tag
-                        self.llm_client.add_message("assistant", final_explanation_content)
-
+                        tool_data = json.loads(tool_call_json_str)
+                        parsed_tool_name = tool_data.get("name")
+                        parsed_tool_args = tool_data.get("parameters", {})
                     except Exception as e:
-                        error_message = f"调用工具 {parsed_tool_name} 时出错: {str(e)}"
-                        yield f"\n<think>\n内部错误: {error_message}\n</think>\n"
-                        # Add error as tool result for LLM to potentially explain
-                        escaped_error_str = str(e).replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-                        error_tool_result = f"<tool_result>\n{{\n  \"name\": \"{parsed_tool_name}\",\n  \"error\": \"{escaped_error_str}\"\n}}\n</tool_result>"
-                        yield f"\n{error_tool_result}\n"
-                        self.llm_client.add_message("user", error_tool_result)
-                        
-                        # Optionally, call LLM again to explain the error
-                        error_explanation_content = ""
-                        async for chunk in self.llm_client.call_llm_api():
-                            error_explanation_content += chunk
-                            yield chunk
-                        self.llm_client.add_message("assistant", error_explanation_content)
-                else:
-                    # Invalid tool name requested by LLM
-                    yield f"\n<think>\nLLM请求了无效的工具: {parsed_tool_name}. 初始回复已发送。\n</think>\n"
-                    # The initial_llm_response_buffer (containing the invalid tool call) was already added to history.
+                        error_msg = f"解析工具调用JSON时出错: {str(e)}"
+                        yield f"\n<think>\n内部错误: {error_msg}\n</think>\n"
+                        # LLM already added initial_llm_response_buffer to history.
+                        return
+
+                    available_tool_names = [tool.name for tool in self.all_tools]
+                    if parsed_tool_name and parsed_tool_name in available_tool_names:
+                        try:
+                            target_server_name = "FastMcpLLM"  # Default server
+                            tool_name_on_server = parsed_tool_name
+
+                            if ":" in parsed_tool_name:
+                                prefix, name_after_colon = parsed_tool_name.split(":", 1)
+                                if prefix in self.mcp_clients:  # Check if prefix is a known server name
+                                    target_server_name = prefix
+                                    tool_name_on_server = name_after_colon
+                            
+                            mcp_client_instance = self.mcp_clients.get(target_server_name)
+                            if not mcp_client_instance:
+                                error_msg = f"错误: 找不到服务器 {target_server_name} 的客户端"
+                                yield f"\n<think>\n内部错误: {error_msg}\n</think>\n"
+                                return
+
+                            tool_result_list = await mcp_client_instance.call_tool(tool_name_on_server, parsed_tool_args or {})
+                            
+                            result_text_parts = []
+                            for content_item in tool_result_list:
+                                if hasattr(content_item, 'text'):
+                                    result_text_parts.append(content_item.text)
+                                elif hasattr(content_item, 'url'):
+                                    result_text_parts.append(f"[图片] {content_item.url}")
+                                # else: skip unknown content types or add a placeholder
+                            tool_result_str = "\n".join(result_text_parts).strip()
+
+                            # Escape for JSON string compatibility within the XML-like tag
+                            escaped_tool_result_str = tool_result_str.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+                            
+                            tool_result_message_for_llm = f"<tool_result>\n{{\n  \"name\": \"{parsed_tool_name}\",\n  \"result\": \"{escaped_tool_result_str}\"\n}}\n</tool_result>\n"
+                            
+                            yield f"{tool_result_message_for_llm}" # Stream the tool result to the client
+
+                            tool_results_message_for_llm += tool_result_message_for_llm
+
+                            # Update conversation history for the next LLM call
+                            # The initial assistant message (initial_llm_response_buffer) is already there.
+                            # Now add the tool_result as if it's a user message for the LLM.
+                            # self.llm_client.add_message("user", tool_result_message_for_llm) 
+
+                        except Exception as e:
+                            error_message = f"调用工具 {parsed_tool_name} 时出错: {str(e)}"
+                            yield f"\n<think>\n内部错误: {error_message}\n</think>\n"
+                            # Add error as tool result for LLM to potentially explain
+                            escaped_error_str = str(e).replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+                            error_tool_result = f"<tool_result>\n{{\n  \"name\": \"{parsed_tool_name}\",\n  \"error\": \"{escaped_error_str}\"\n}}\n</tool_result>"
+                            yield f"\n{error_tool_result}\n"
+                            self.llm_client.add_message("user", error_tool_result)
+                            
+                            # Optionally, call LLM again to explain the error
+                            error_explanation_content = ""
+                            async for chunk in self.llm_client.call_llm_api():
+                                error_explanation_content += chunk
+                                yield chunk
+                            self.llm_client.add_message("assistant", error_explanation_content)
+                    else:
+                        # Invalid tool name requested by LLM
+                        yield f"\n<think>\n无效的工具: {parsed_tool_name}. 初始回复已发送。\n</think>\n"
+                        # The initial_llm_response_buffer (containing the invalid tool call) was already added to history.
+                # Stream 2: LLM explanation of tool result
+                final_explanation_content = ""
+                # print("Calling LLM with tool results:", tool_results_message_for_llm)
+                async for chunk in self.process_message(tool_results_message_for_llm): # Uses updated history
+                    if isinstance(chunk, str) and chunk.startswith("错误:"):
+                        yield chunk
+                        return
+                    final_explanation_content += chunk
+                    yield chunk
+                
+                # Replace the previous assistant message with the full exchange if tool call was successful
+                if self.llm_client.conversation_history and self.llm_client.conversation_history[-2]["role"] == "assistant":
+                    self.llm_client.conversation_history[-2]["content"] = initial_llm_response_buffer # Ensure this is the one with the <tool> tag
+                self.llm_client.add_message("assistant", final_explanation_content)
+
+                
             # else: No tool call found in the initial LLM response.
             # The initial_llm_response_buffer was already streamed and added to history.
             # Nothing more to do in this case.
