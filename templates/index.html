@@ -5,47 +5,188 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FastMcpLLM 对话工具</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>FastMcpLLM 对话工具</h1>
-            <p>一个支持MCP的LLM对话工具</p>
-        </header>
+    <div class="app-container">
+        <div class="sidebar-toggle" id="sidebar-toggle">
+            <i class="fas fa-bars"></i>
+        </div>
 
-        <main>
-            <div class="main-content">
-                <div class="chat-container">
-                    <div class="chat-messages" id="chat-messages">
-                        <div class="message system">
-                            <div class="message-content">欢迎使用FastMcpLLM对话工具！您可以开始与AI助手对话，助手可以通过MCP协议调用各种工具来扩展能力。</div>
+        <div class="container">
+            <header>
+                <div class="logo">
+                    <i class="fas fa-robot logo-icon"></i>
+                    <div class="logo-text">
+                        <h1>FastMcpLLM</h1>
+                        <p>智能对话助手</p>
+                    </div>
+                </div>
+                <div class="theme-toggle" id="theme-toggle">
+                    <i class="fas fa-moon"></i>
+                </div>
+            </header>
+
+            <main>
+                <div class="main-content">
+                    <!-- 会话列表侧边栏 -->
+                    <div class="sessions-panel" id="sessions-panel">
+                        <div class="sessions-header">
+                            <h2><i class="fas fa-comments"></i> 对话会话</h2>
+                            <button id="new-session-btn" class="btn btn-small">
+                                <i class="fas fa-plus"></i> 新建
+                            </button>
+                        </div>
+                        <div class="sessions-list" id="sessions-list">
+                            <div class="loading-sessions">
+                                <i class="fas fa-spinner fa-spin"></i> 加载中...
+                            </div>
                         </div>
                     </div>
 
-                    <div class="chat-input-container">
-                        <textarea id="user-input" placeholder="输入您的消息..." rows="3"></textarea>
-                        <div class="button-container">
-                            <button id="clear-btn" class="btn btn-secondary">清除对话</button>
-                            <button id="send-btn" class="btn btn-primary">发送</button>
+                    <div class="chat-container">
+                        <div class="chat-header">
+                            <div class="current-session-info" id="current-session-info">
+                                <span class="session-title">默认会话</span>
+                            </div>
+                            <div class="chat-actions">
+                                <button id="toggle-params-btn" class="icon-btn" title="LLM参数设置">
+                                    <i class="fas fa-sliders-h"></i>
+                                </button>
+                                <button id="toggle-tools-btn" class="icon-btn" title="显示/隐藏工具面板">
+                                    <i class="fas fa-toolbox"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="chat-messages" id="chat-messages">
+                            <div class="message system">
+                                <div class="message-content">
+                                    <i class="fas fa-info-circle"></i> 欢迎使用FastMcpLLM对话工具！您可以开始与AI助手对话，助手可以通过MCP协议调用各种工具来扩展能力。
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="chat-input-container">
+                            <textarea id="user-input" placeholder="输入您的消息..." rows="3"></textarea>
+                            <div class="button-container">
+                                <button id="clear-btn" class="btn btn-secondary">
+                                    <i class="fas fa-trash-alt"></i> 清除对话
+                                </button>
+                                <button id="send-btn" class="btn btn-primary">
+                                    <i class="fas fa-paper-plane"></i> 发送
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tools-panel" id="tools-panel">
+                        <div class="tools-header">
+                            <h2><i class="fas fa-toolbox"></i> 可用工具</h2>
+                            <button id="refresh-tools-btn" class="btn btn-small">
+                                <i class="fas fa-sync-alt"></i> 刷新
+                            </button>
+                        </div>
+                        <div class="tools-list" id="tools-list">
+                            <div class="loading-tools">
+                                <i class="fas fa-spinner fa-spin"></i> 加载中...
+                            </div>
                         </div>
                     </div>
                 </div>
+            </main>
 
-                <div class="tools-panel" id="tools-panel">
-                    <div class="tools-header">
-                        <h2>可用工具</h2>
-                        <button id="refresh-tools-btn" class="btn btn-small">刷新</button>
+            <footer>
+                <p>Powered by <span class="highlight">VSEdison</span> &copy; 2025</p>
+            </footer>
+        </div>
+    </div>
+
+    <!-- 会话操作模态框 -->
+    <div class="modal" id="session-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modal-title">新建会话</h2>
+                <span class="close-modal"><i class="fas fa-times"></i></span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="session-name">会话名称</label>
+                    <div class="input-with-icon">
+                        <i class="fas fa-comment-dots input-icon"></i>
+                        <input type="text" id="session-name" placeholder="输入会话名称">
                     </div>
-                    <div class="tools-list" id="tools-list">
-                        <div class="loading-tools">加载中...</div>
+                </div>
+                <input type="hidden" id="session-id" value="">
+            </div>
+            <div class="modal-footer">
+                <button id="cancel-session-btn" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> 取消
+                </button>
+                <button id="save-session-btn" class="btn btn-primary">
+                    <i class="fas fa-save"></i> 保存
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 移动端会话列表抽屉 -->
+    <div class="mobile-drawer" id="mobile-sessions-drawer">
+        <div class="drawer-header">
+            <h2><i class="fas fa-comments"></i> 对话会话</h2>
+            <button class="close-drawer" id="close-drawer">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="drawer-content" id="mobile-sessions-list">
+            <!-- 会话列表将通过JavaScript动态填充 -->
+        </div>
+    </div>
+
+    <!-- 遮罩层 -->
+    <div class="overlay" id="overlay"></div>
+
+    <!-- 加载动画 -->
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="spinner">
+            <i class="fas fa-spinner fa-spin"></i>
+        </div>
+    </div>
+
+    <!-- LLM参数设置模态框 -->
+    <div class="modal" id="params-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>LLM参数设置</h2>
+                <span class="close-modal" id="close-params-modal"><i class="fas fa-times"></i></span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="temperature">Temperature (0-2)</label>
+                    <div class="slider-container">
+                        <input type="range" id="temperature-slider" min="0" max="2" step="0.1" value="0.2">
+                        <input type="number" id="temperature-value" min="0" max="2" step="0.1" value="0.2">
                     </div>
+                    <p class="param-description">控制生成文本的随机性。较低的值使输出更确定，较高的值使输出更多样化。</p>
+                </div>
+                <div class="form-group">
+                    <label for="max-tokens">Max Tokens</label>
+                    <div class="slider-container">
+                        <input type="range" id="max-tokens-slider" min="100" max="100000" step="100" value="40960">
+                        <input type="number" id="max-tokens-value" min="100" max="100000" step="100" value="40960">
+                    </div>
+                    <p class="param-description">生成文本的最大token数。较大的值允许更长的回复，但可能增加API成本。</p>
                 </div>
             </div>
-        </main>
-
-        <footer>
-            <p>Powered by FastMCP &copy; 2025</p>
-        </footer>
+            <div class="modal-footer">
+                <button id="reset-params-btn" class="btn btn-secondary">
+                    <i class="fas fa-undo"></i> 重置
+                </button>
+                <button id="save-params-btn" class="btn btn-primary">
+                    <i class="fas fa-save"></i> 保存
+                </button>
+            </div>
+        </div>
     </div>
 
     <script src="{{ url_for('static', filename='js/script.js') }}"></script>

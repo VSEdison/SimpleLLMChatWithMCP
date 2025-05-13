@@ -11,6 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from fastmcp import Client
+import db_utils
 
 # 加载环境变量
 load_dotenv()
@@ -20,9 +21,12 @@ class LLMClient:
     LLM客户端，负责与LLM API通信
     """
 
-    def __init__(self):
+    def __init__(self, session_id: int = 1):
         """
         初始化LLM客户端
+
+        Args:
+            session_id: 会话ID，默认为1（默认会话）
         """
         self.api_url = os.getenv("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
         self.api_model = os.getenv("LLM_API_MODEL", "gpt-3.5-turbo")
@@ -31,12 +35,33 @@ class LLMClient:
         if not self.api_key:
             print("警告: 未设置API密钥，请在.env文件中设置LLM_API_KEY")
 
+        self.session_id = session_id
         self.conversation_history = []
         self.system_message = "你是一个由FastMcpLLM提供支持的AI助手。你可以通过MCP协议调用各种工具来扩展你的能力。请确保使用中文进行回答。"
 
+        # LLM参数设置
+        self.temperature = 0.2
+        self.max_tokens = 40960
+
+        # 从数据库加载对话历史
+        self.load_history_from_db()
+
+    def load_history_from_db(self) -> None:
+        """
+        从数据库加载对话历史
+        """
+        self.conversation_history = []
+        conversations = db_utils.get_conversations(self.session_id)
+
+        for conv in conversations:
+            self.conversation_history.append({
+                "role": conv["role"],
+                "content": conv["content"]
+            })
+
     def add_message(self, role: str, content: str) -> None:
         """
-        添加消息到对话历史
+        添加消息到对话历史并保存到数据库
 
         Args:
             role: 消息角色 (user, assistant, system)
@@ -44,11 +69,27 @@ class LLMClient:
         """
         self.conversation_history.append({"role": role, "content": content})
 
+        # 保存到数据库
+        db_utils.add_message(self.session_id, role, content)
+
     def clear_history(self) -> None:
         """
         清除对话历史
         """
         self.conversation_history = []
+
+        # 清除数据库中的对话历史
+        db_utils.clear_conversations(self.session_id)
+
+    def set_session(self, session_id: int) -> None:
+        """
+        切换会话
+
+        Args:
+            session_id: 新的会话ID
+        """
+        self.session_id = session_id
+        self.load_history_from_db()
 
     def set_system_message(self, message: str) -> None:
         """
@@ -58,6 +99,32 @@ class LLMClient:
             message: 系统消息内容
         """
         self.system_message = message
+
+    def set_temperature(self, temperature: float) -> None:
+        """
+        设置temperature参数
+
+        Args:
+            temperature: 温度值，控制生成文本的随机性，范围0-2
+        """
+        # 确保temperature在有效范围内
+        if temperature < 0:
+            temperature = 0
+        elif temperature > 2:
+            temperature = 2
+        self.temperature = temperature
+
+    def set_max_tokens(self, max_tokens: int) -> None:
+        """
+        设置max_tokens参数
+
+        Args:
+            max_tokens: 生成文本的最大token数
+        """
+        # 确保max_tokens为正整数
+        if max_tokens < 1:
+            max_tokens = 1
+        self.max_tokens = max_tokens
 
     def get_messages(self) -> List[Dict[str, str]]:
         """
@@ -91,11 +158,11 @@ class LLMClient:
         data = {
             "model": self.api_model,
             "messages": messages,
-            "temperature": 0.7,
-            "max_tokens" : 40960,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
             "stream": True  # 启用流式响应
         }
-        
+
         try:
             # 使用 aiohttp 进行异步请求
             import aiohttp
@@ -142,7 +209,7 @@ class LLMClient:
                 return
             full_response += chunk
             yield chunk
-        
+
         self.add_message("assistant", full_response)
 
 
@@ -158,7 +225,8 @@ class MCPLLMClient:
         Args:
             mcp_servers_file: MCP服务器配置文件路径
         """
-        self.llm_client = LLMClient()
+        self.current_session_id = 1  # 默认会话ID
+        self.llm_client = LLMClient(self.current_session_id)
         self.mcp_servers_file = mcp_servers_file
         self.mcp_clients = {}  # 存储多个MCP客户端
         self.tools_map = {}    # 存储工具名称到客户端的映射
@@ -299,7 +367,7 @@ class MCPLLMClient:
                     return
                 initial_llm_response_buffer += chunk
                 yield chunk # Stream raw text to client
-            
+
             # Add the full initial assistant message to history (important for context if no tool call or if tool call fails before next LLM)
             # This will be overwritten if a tool call is successful and a new assistant message is generated later.
             self.llm_client.add_message("assistant", initial_llm_response_buffer)
@@ -309,14 +377,14 @@ class MCPLLMClient:
             # json is already imported globally
 
             tool_call_matches = re.findall(r'<tool>(.*?)</tool>', initial_llm_response_buffer, re.DOTALL)
-           
+
 
             if tool_call_matches:
                 # print(initial_llm_response_buffer)
                 tool_results_message_for_llm = ""
                 for tool_call_json_str in tool_call_matches:
                     tool_call_json_str = tool_call_json_str.strip()
-                    
+
                     # The LLM's output containing the tool call has already been streamed.
                     # Now we process the tool call.
 
@@ -343,7 +411,7 @@ class MCPLLMClient:
                                 if prefix in self.mcp_clients:  # Check if prefix is a known server name
                                     target_server_name = prefix
                                     tool_name_on_server = name_after_colon
-                            
+
                             mcp_client_instance = self.mcp_clients.get(target_server_name)
                             if not mcp_client_instance:
                                 error_msg = f"错误: 找不到服务器 {target_server_name} 的客户端"
@@ -351,7 +419,7 @@ class MCPLLMClient:
                                 return
 
                             tool_result_list = await mcp_client_instance.call_tool(tool_name_on_server, parsed_tool_args or {})
-                            
+
                             result_text_parts = []
                             for content_item in tool_result_list:
                                 if hasattr(content_item, 'text'):
@@ -363,9 +431,9 @@ class MCPLLMClient:
 
                             # Escape for JSON string compatibility within the XML-like tag
                             escaped_tool_result_str = tool_result_str.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-                            
+
                             tool_result_message_for_llm = f"<tool_result>\n{{\n  \"name\": \"{parsed_tool_name}\",\n  \"result\": \"{escaped_tool_result_str}\"\n}}\n</tool_result>\n"
-                            
+
                             yield f"{tool_result_message_for_llm}" # Stream the tool result to the client
 
                             tool_results_message_for_llm += tool_result_message_for_llm
@@ -373,7 +441,7 @@ class MCPLLMClient:
                             # Update conversation history for the next LLM call
                             # The initial assistant message (initial_llm_response_buffer) is already there.
                             # Now add the tool_result as if it's a user message for the LLM.
-                            # self.llm_client.add_message("user", tool_result_message_for_llm) 
+                            # self.llm_client.add_message("user", tool_result_message_for_llm)
 
                         except Exception as e:
                             error_message = f"调用工具 {parsed_tool_name} 时出错: {str(e)}"
@@ -383,7 +451,7 @@ class MCPLLMClient:
                             error_tool_result = f"<tool_result>\n{{\n  \"name\": \"{parsed_tool_name}\",\n  \"error\": \"{escaped_error_str}\"\n}}\n</tool_result>"
                             yield f"\n{error_tool_result}\n"
                             self.llm_client.add_message("user", error_tool_result)
-                            
+
                             # Optionally, call LLM again to explain the error
                             error_explanation_content = ""
                             async for chunk in self.llm_client.call_llm_api():
@@ -403,13 +471,14 @@ class MCPLLMClient:
                         return
                     final_explanation_content += chunk
                     yield chunk
-                
+
                 # Replace the previous assistant message with the full exchange if tool call was successful
                 if self.llm_client.conversation_history and self.llm_client.conversation_history[-2]["role"] == "assistant":
                     self.llm_client.conversation_history[-2]["content"] = initial_llm_response_buffer # Ensure this is the one with the <tool> tag
-                self.llm_client.add_message("assistant", final_explanation_content)
 
-                
+                # self.llm_client.add_message("assistant", final_explanation_content)
+
+
             # else: No tool call found in the initial LLM response.
             # The initial_llm_response_buffer was already streamed and added to history.
             # Nothing more to do in this case.
@@ -426,9 +495,99 @@ class MCPLLMClient:
 
     def clear_history(self) -> None:
         """
-        清除对话历史
+        清除当前会话的对话历史
         """
         self.llm_client.clear_history()
+
+    def get_sessions(self) -> List[Dict[str, Any]]:
+        """
+        获取所有会话
+
+        Returns:
+            会话列表
+        """
+        return db_utils.get_sessions()
+
+    def create_session(self, name: str) -> int:
+        """
+        创建新会话
+
+        Args:
+            name: 会话名称
+
+        Returns:
+            新会话的ID
+        """
+        return db_utils.create_session(name)
+
+    def switch_session(self, session_id: int) -> None:
+        """
+        切换到指定会话
+
+        Args:
+            session_id: 会话ID
+        """
+        self.current_session_id = session_id
+        self.llm_client.set_session(session_id)
+
+    def rename_session(self, session_id: int, name: str) -> bool:
+        """
+        重命名会话
+
+        Args:
+            session_id: 会话ID
+            name: 新的会话名称
+
+        Returns:
+            是否重命名成功
+        """
+        return db_utils.update_session(session_id, name)
+
+    def delete_session(self, session_id: int) -> bool:
+        """
+        删除会话
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            是否删除成功
+        """
+        # 如果删除的是当前会话，切换到默认会话
+        if session_id == self.current_session_id:
+            self.switch_session(1)  # 默认会话ID为1
+
+        return db_utils.delete_session(session_id)
+
+    def set_temperature(self, temperature: float) -> None:
+        """
+        设置temperature参数
+
+        Args:
+            temperature: 温度值，控制生成文本的随机性
+        """
+        self.llm_client.set_temperature(temperature)
+
+    def set_max_tokens(self, max_tokens: int) -> None:
+        """
+        设置max_tokens参数
+
+        Args:
+            max_tokens: 生成文本的最大token数
+        """
+        self.llm_client.set_max_tokens(max_tokens)
+
+    def get_llm_params(self) -> Dict[str, Any]:
+        """
+        获取当前LLM参数
+
+        Returns:
+            包含temperature和max_tokens的字典
+        """
+        return {
+            "temperature": self.llm_client.temperature,
+            "max_tokens": self.llm_client.max_tokens
+        }
 
 
 # 创建全局客户端实例

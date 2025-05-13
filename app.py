@@ -9,10 +9,11 @@ import signal
 import sys
 import threading
 import json
-from quart import Quart, render_template, jsonify, websocket
+from quart import Quart, render_template, jsonify, websocket, request
 from dotenv import load_dotenv
 
 from mcp_client import mcp_llm_client
+import db_utils
 
 # 加载环境变量
 load_dotenv()
@@ -90,8 +91,12 @@ async def initialize_client():
     初始化MCP客户端
     """
     global client_initialized
-    print("初始化MCP客户端")
+
+    print("初始化MCP客户端", initialization_lock.locked())
+    if(initialization_lock.locked()) :
+        return
     with initialization_lock:
+        print("inside lock")
         if client_initialized:
             return
 
@@ -134,10 +139,132 @@ async def index():
 @app.route('/api/clear', methods=['POST'])
 async def clear_history():
     """
-    清除对话历史
+    清除当前会话的对话历史
     """
     mcp_llm_client.clear_history()
     return jsonify({'status': 'success', 'message': '对话历史已清除'})
+
+
+@app.route('/api/sessions', methods=['GET'])
+async def get_sessions():
+    """
+    获取所有会话
+    """
+    sessions = mcp_llm_client.get_sessions()
+    return jsonify({
+        'status': 'success',
+        'sessions': sessions,
+        'current_session_id': mcp_llm_client.current_session_id
+    })
+
+
+@app.route('/api/sessions', methods=['POST'])
+async def create_session():
+    """
+    创建新会话
+    """
+    data = await request.get_json()
+    name = data.get('name', '新会话')
+
+    session_id = mcp_llm_client.create_session(name)
+
+    return jsonify({
+        'status': 'success',
+        'session_id': session_id,
+        'message': f'已创建会话: {name}'
+    })
+
+
+@app.route('/api/sessions/<int:session_id>', methods=['PUT'])
+async def update_session(session_id):
+    """
+    更新会话信息
+    """
+    data = await request.get_json()
+    name = data.get('name')
+
+    if name:
+        success = mcp_llm_client.rename_session(session_id, name)
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': f'已重命名会话: {name}'
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': '重命名会话失败'
+            }), 400
+
+    return jsonify({
+        'status': 'error',
+        'message': '缺少必要参数'
+    }), 400
+
+
+@app.route('/api/sessions/<int:session_id>', methods=['DELETE'])
+async def delete_session(session_id):
+    """
+    删除会话
+    """
+    success = mcp_llm_client.delete_session(session_id)
+
+    if success:
+        return jsonify({
+            'status': 'success',
+            'message': '已删除会话'
+        })
+    else:
+        return jsonify({
+            'status': 'error',
+            'message': '删除会话失败，可能是最后一个会话或会话不存在'
+        }), 400
+
+
+@app.route('/api/sessions/switch/<int:session_id>', methods=['POST'])
+async def switch_session(session_id):
+    """
+    切换会话
+    """
+    try:
+        mcp_llm_client.switch_session(session_id)
+        return jsonify({
+            'status': 'success',
+            'message': '已切换会话'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'切换会话失败: {str(e)}'
+        }), 400
+
+
+@app.route('/api/sessions/<int:session_id>/messages', methods=['GET'])
+async def get_session_messages(session_id):
+    """
+    获取会话的历史消息
+    """
+    try:
+        # 获取会话的历史消息
+        conversations = db_utils.get_conversations(session_id)
+
+        # 转换为前端需要的格式
+        messages = []
+        for conv in conversations:
+            messages.append({
+                'role': conv['role'],
+                'content': conv['content']
+            })
+
+        return jsonify({
+            'status': 'success',
+            'messages': messages
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'获取会话历史消息失败: {str(e)}'
+        }), 400
 
 
 @app.route('/api/tools', methods=['GET'])
@@ -179,6 +306,56 @@ async def get_tools():
     })
 
 
+@app.route('/api/llm-params', methods=['GET'])
+async def get_llm_params():
+    """
+    获取当前LLM参数设置
+    """
+    params = mcp_llm_client.get_llm_params()
+    return jsonify({
+        'status': 'success',
+        'params': params
+    })
+
+
+@app.route('/api/llm-params', methods=['POST'])
+async def set_llm_params():
+    """
+    设置LLM参数
+    """
+    data = await request.get_json()
+
+    # 更新temperature参数
+    if 'temperature' in data:
+        try:
+            temperature = float(data['temperature'])
+            mcp_llm_client.set_temperature(temperature)
+        except (ValueError, TypeError) as e:
+            return jsonify({
+                'status': 'error',
+                'message': f'无效的temperature值: {str(e)}'
+            }), 400
+
+    # 更新max_tokens参数
+    if 'max_tokens' in data:
+        try:
+            max_tokens = int(data['max_tokens'])
+            mcp_llm_client.set_max_tokens(max_tokens)
+        except (ValueError, TypeError) as e:
+            return jsonify({
+                'status': 'error',
+                'message': f'无效的max_tokens值: {str(e)}'
+            }), 400
+
+    # 返回更新后的参数
+    params = mcp_llm_client.get_llm_params()
+    return jsonify({
+        'status': 'success',
+        'message': '参数已更新',
+        'params': params
+    })
+
+
 @app.websocket('/api/ws')
 async def ws():
     """
@@ -193,10 +370,19 @@ async def ws():
         data = await websocket.receive()
         message_data = json.loads(data)
         user_message = message_data.get('message', '')
+        session_id = message_data.get('session_id', mcp_llm_client.current_session_id)
 
         if not user_message:
             await websocket.send(json.dumps({'error': '消息不能为空'}))
             return
+
+        # 如果指定了会话ID且与当前会话不同，则切换会话
+        if session_id != mcp_llm_client.current_session_id:
+            try:
+                mcp_llm_client.switch_session(session_id)
+            except Exception as e:
+                await websocket.send(f"[ERROR]切换会话失败: {str(e)}")
+                return
 
         # 处理消息流
         async for chunk in mcp_llm_client.process_message(user_message):
